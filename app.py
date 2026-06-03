@@ -2,143 +2,141 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# =========================
-# PAGE CONFIG
-# =========================
-
 st.set_page_config(
-    page_title="Dashboard Suhu Jawa Timur",
+    page_title="Dashboard BMKG Jawa Timur",
     layout="wide"
 )
 
-st.title("Dashboard Suhu Jawa Timur")
-st.write("Visualisasi Data Suhu BMKG Jawa Timur")
-
+st.title("Dashboard Data BMKG Jawa Timur")
+st.write("Visualisasi suhu dan cuaca dari dataset BMKG")
 
 # =========================
 # LOAD DATA
 # =========================
-
 @st.cache_data
-
 def load_data():
+    df = pd.read_excel("data/data_suhu_lama.xlsx")
 
-    df = pd.read_csv("data/data_gabungan.csv")
+    # Rapikan nama kolom
+    df.columns = df.columns.str.strip().str.upper()
 
+    # Rename kolom
+    df = df.rename(columns={
+        "TANGGAL": "tanggal",
+        "DAERAH": "daerah",
+        "TN": "tn",
+        "TX": "tx",
+        "TAVG": "tavg",
+        "RH_AVG": "rh_avg",
+        "RR": "rr",
+        "SS": "ss",
+        "FF_X": "ff_x",
+        "DDD_X": "ddd_x",
+        "FF_AVG": "ff_avg",
+        "DDD_CAR": "ddd_car"
+    })
+
+    # Parsing tanggal
     df["tanggal"] = pd.to_datetime(df["tanggal"])
 
-    # Tambahan kolom
+    # Tambahan fitur waktu
     df["tahun"] = df["tanggal"].dt.year
     df["bulan"] = df["tanggal"].dt.month_name()
     df["hari"] = df["tanggal"].dt.day
 
     return df
 
-
-# Load dataframe
 df = load_data()
-
 
 # =========================
 # SIDEBAR FILTER
 # =========================
+st.sidebar.header("Filter Data")
 
-st.sidebar.header("Filter Dashboard")
-
-# FILTER DAERAH
 pilih_daerah = st.sidebar.multiselect(
-    "Pilih Daerah",
+    "Daerah",
     options=sorted(df["daerah"].unique()),
     default=sorted(df["daerah"].unique())
 )
 
-# FILTER TAHUN
 pilih_tahun = st.sidebar.multiselect(
-    "Pilih Tahun",
+    "Tahun",
     options=sorted(df["tahun"].unique()),
     default=sorted(df["tahun"].unique())
 )
 
-# FILTER BULAN
 pilih_bulan = st.sidebar.multiselect(
-    "Pilih Bulan",
+    "Bulan",
     options=df["bulan"].unique(),
     default=df["bulan"].unique()
 )
 
-# FILTER TANGGAL
-min_date = df["tanggal"].min()
-max_date = df["tanggal"].max()
+# Filter tanggal
+min_date = df["tanggal"].min().date()
+max_date = df["tanggal"].max().date()
 
-pilih_tanggal = st.sidebar.date_input(
-    "Pilih Rentang Tanggal",
+rentang_tanggal = st.sidebar.date_input(
+    "Rentang Tanggal",
     [min_date, max_date]
 )
-
 
 # =========================
 # FILTER DATA
 # =========================
-
 filtered_df = df[
     (df["daerah"].isin(pilih_daerah)) &
     (df["tahun"].isin(pilih_tahun)) &
     (df["bulan"].isin(pilih_bulan))
 ]
 
-# Filter tanggal
-if len(pilih_tanggal) == 2:
-
-    start_date = pd.to_datetime(pilih_tanggal[0])
-    end_date = pd.to_datetime(pilih_tanggal[1])
+if len(rentang_tanggal) == 2:
+    start_date = pd.to_datetime(rentang_tanggal[0])
+    end_date = pd.to_datetime(rentang_tanggal[1])
 
     filtered_df = filtered_df[
         (filtered_df["tanggal"] >= start_date) &
         (filtered_df["tanggal"] <= end_date)
     ]
 
-
 # =========================
 # METRIC
 # =========================
+st.subheader("Ringkasan")
 
-st.subheader("Ringkasan Data")
+col1, col2, col3, col4 = st.columns(4)
 
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "Rata-rata TN",
-    round(filtered_df["tm"].mean(), 2)
-)
-
-col2.metric(
-    "Rata-rata TX",
-    round(filtered_df["tx"].mean(), 2)
-)
-
-col3.metric(
-    "Rata-rata TAVG",
-    round(filtered_df["tavg"].mean(), 2)
-)
-
+col1.metric("Jumlah Data", len(filtered_df))
+col2.metric("Rata-rata TN", round(filtered_df["tn"].mean(), 2))
+col3.metric("Rata-rata TX", round(filtered_df["tx"].mean(), 2))
+col4.metric("Rata-rata TAVG", round(filtered_df["tavg"].mean(), 2))
 
 # =========================
-# TABEL DATA
+# TABLE
 # =========================
-
-st.subheader("Data Suhu")
+st.subheader("Dataset")
+kolom_tampil = [
+    "tanggal",
+    "daerah",
+    "tn",
+    "tx",
+    "tavg",
+    "rh_avg",
+    "rr",
+    "ss",
+    "ff_x",
+    "ddd_x",
+    "ff_avg",
+    "ddd_car"
+]
 
 st.dataframe(
-    filtered_df,
+    filtered_df[kolom_tampil],
     use_container_width=True
 )
-
-
 # =========================
-# GRAFIK LINE TAVG
+# LINE CHART
 # =========================
-
-st.subheader("Tren Suhu Rata-rata")
+st.subheader("Tren Suhu Harian")
 
 fig_line = px.line(
     filtered_df,
@@ -149,63 +147,43 @@ fig_line = px.line(
     title="Tren TAVG Setiap Daerah"
 )
 
-fig_line.update_layout(
-    xaxis_title="Tanggal",
-    yaxis_title="TAVG",
-    hovermode="x unified"
-)
-
-st.plotly_chart(
-    fig_line,
-    use_container_width=True
-)
-
+st.plotly_chart(fig_line, use_container_width=True)
 
 # =========================
-# GRAFIK BAR TN TX
+# BAR CHART
 # =========================
-
 st.subheader("Perbandingan TN dan TX")
 
+avg_daerah = filtered_df.groupby("daerah")[["tn", "tx"]].mean().reset_index()
+
 fig_bar = px.bar(
-    filtered_df,
+    avg_daerah,
     x="daerah",
-    y=["tm", "tx"],
+    y=["tn", "tx"],
     barmode="group",
-    title="Perbandingan Suhu Minimum dan Maksimum"
+    title="Rata-rata Suhu Minimum dan Maksimum"
 )
 
-st.plotly_chart(
-    fig_bar,
-    use_container_width=True
-)
-
+st.plotly_chart(fig_bar, use_container_width=True)
 
 # =========================
-# GRAFIK BOXPLOT
+# BOXPLOT
 # =========================
-
 st.subheader("Distribusi Suhu")
 
 fig_box = px.box(
     filtered_df,
     x="daerah",
     y="tavg",
-    color="daerah",
-    title="Distribusi TAVG Tiap Daerah"
+    color="daerah"
 )
 
-st.plotly_chart(
-    fig_box,
-    use_container_width=True
-)
-
+st.plotly_chart(fig_box, use_container_width=True)
 
 # =========================
-# GRAFIK HEATMAP SEDERHANA
+# HEATMAP
 # =========================
-
-st.subheader("Heatmap Suhu")
+st.subheader("Heatmap Temperatur")
 
 pivot_df = filtered_df.pivot_table(
     values="tavg",
@@ -216,11 +194,7 @@ pivot_df = filtered_df.pivot_table(
 
 fig_heatmap = px.imshow(
     pivot_df,
-    aspect="auto",
-    title="Heatmap TAVG"
+    aspect="auto"
 )
 
-st.plotly_chart(
-    fig_heatmap,
-    use_container_width=True
-)
+st.plotly_chart(fig_heatmap, use_container_width=True)
