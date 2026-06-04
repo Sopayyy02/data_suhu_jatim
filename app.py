@@ -144,9 +144,40 @@ st.markdown(
 )
 
 # =========================
-# HELPERS
+# CONSTANTS
 # =========================
 DATA_PATH = Path("data/data_suhu_lama.xlsx")
+
+MONTHS_ID = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+]
+MONTH_TO_NUM = {name: i + 1 for i, name in enumerate(MONTHS_ID)}
+NUM_TO_MONTH = {i + 1: name for i, name in enumerate(MONTHS_ID)}
+
+PARAMETER_OPTIONS = {
+    "TN (Suhu Minimum)": "tn",
+    "TX (Suhu Maksimum)": "tx",
+    "TAVG (Suhu Rata-rata)": "tavg",
+    "RH_AVG (Kelembapan)": "rh_avg",
+    "RR (Curah Hujan)": "rr",
+    "SS (Lama Penyinaran)": "ss",
+    "FF_X (Kecepatan Angin Maks)": "ff_x",
+    "FF_AVG (Kecepatan Angin Rata-rata)": "ff_avg",
+    "DDD_X (Derajat Angin)": "ddd_x",
+}
+
+PARAMETER_UNIT = {
+    "tavg": "°C",
+    "tn": "°C",
+    "tx": "°C",
+    "rh_avg": "%",
+    "rr": "mm",
+    "ss": "jam",
+    "ff_x": "",
+    "ff_avg": "",
+    "ddd_x": "°",
+}
 
 NUMERIC_COLS = [
     "tn", "tx", "tavg", "rh_avg", "rr", "ss", "ff_x", "ddd_x", "ff_avg"
@@ -167,11 +198,17 @@ RENAME_MAP = {
     "DDD_CAR": "ddd_car",
 }
 
+DEFAULT_PARAMETER = "TAVG (Suhu Rata-rata)"
+
+# =========================
+# HELPERS
+# =========================
 def safe_mean(series: pd.Series):
     if series is None or series.empty:
         return None
     val = series.mean()
     return None if pd.isna(val) else round(float(val), 2)
+
 
 def safe_max(series: pd.Series):
     if series is None or series.empty:
@@ -179,18 +216,24 @@ def safe_max(series: pd.Series):
     val = series.max()
     return None if pd.isna(val) else round(float(val), 2)
 
+
 def safe_min(series: pd.Series):
     if series is None or series.empty:
         return None
     val = series.min()
     return None if pd.isna(val) else round(float(val), 2)
 
+
 def fmt_num(val, suffix=""):
     if val is None or pd.isna(val):
         return "-"
-    if float(val).is_integer():
-        return f"{int(val)}{suffix}"
+    try:
+        if float(val).is_integer():
+            return f"{int(val)}{suffix}"
+    except Exception:
+        return f"{val}{suffix}"
     return f"{val:.2f}{suffix}"
+
 
 def render_metric_card(title, value, subtext=""):
     st.markdown(
@@ -204,21 +247,18 @@ def render_metric_card(title, value, subtext=""):
         unsafe_allow_html=True,
     )
 
+
 @st.cache_data(show_spinner=False)
 def load_data():
     if not DATA_PATH.exists():
-        raise FileNotFoundError(
-            f"File tidak ditemukan: {DATA_PATH.resolve()}"
-        )
+        raise FileNotFoundError(f"File tidak ditemukan: {DATA_PATH.resolve()}")
 
     df = pd.read_excel(DATA_PATH)
     df.columns = df.columns.str.strip().str.upper()
     df = df.rename(columns=RENAME_MAP)
 
     if "tanggal" not in df.columns or "daerah" not in df.columns:
-        raise ValueError(
-            "Kolom wajib tidak ditemukan. Pastikan ada TANGGAL dan DAERAH."
-        )
+        raise ValueError("Kolom wajib tidak ditemukan. Pastikan ada TANGGAL dan DAERAH.")
 
     df["tanggal"] = pd.to_datetime(df["tanggal"], errors="coerce")
     df = df.dropna(subset=["tanggal", "daerah"]).copy()
@@ -244,152 +284,31 @@ def load_data():
 
     df["tahun"] = df["tanggal"].dt.year
     df["bulan_num"] = df["tanggal"].dt.month
-    df["bulan"] = df["tanggal"].dt.strftime("%B")
+    df["bulan"] = df["bulan_num"].map(NUM_TO_MONTH)
     df["bulan_tahun"] = df["tanggal"].dt.strftime("%Y-%m")
     df["hari"] = df["tanggal"].dt.day
 
     df = df.sort_values(["tanggal", "daerah"]).reset_index(drop=True)
     return df
 
-def apply_filters(df: pd.DataFrame):
-    st.sidebar.markdown("## 🎛️ Filter")
 
-    all_daerah = sorted(df["daerah"].dropna().unique().tolist())
-    all_tahun = sorted(df["tahun"].dropna().unique().tolist())
+def get_series(df: pd.DataFrame, col: str):
+    if col in df.columns:
+        return df[col].dropna()
+    return pd.Series(dtype="float64")
 
-    bulan_order = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ]
-    bulan_tersedia = [b for b in bulan_order if b in df["bulan"].unique()]
 
-    if "selected_daerah" not in st.session_state:
-        st.session_state.selected_daerah = all_daerah
-    if "selected_tahun" not in st.session_state:
-        st.session_state.selected_tahun = all_tahun
-    if "selected_bulan" not in st.session_state:
-        st.session_state.selected_bulan = bulan_tersedia
-    if "date_range" not in st.session_state:
-        st.session_state.date_range = [df["tanggal"].min().date(), df["tanggal"].max().date()]
+def distribution_chart(filtered_df: pd.DataFrame, parameter_col: str, parameter_label: str):
+    if filtered_df.empty or parameter_col not in filtered_df.columns:
+        return None
 
-    if st.sidebar.button("🔄 Refresh Data"):
-        st.cache_data.clear()
-        st.rerun()
-
-    if st.sidebar.button("♻️ Reset Filter"):
-        st.session_state.selected_daerah = all_daerah
-        st.session_state.selected_tahun = all_tahun
-        st.session_state.selected_bulan = bulan_tersedia
-        st.session_state.date_range = [df["tanggal"].min().date(), df["tanggal"].max().date()]
-        st.rerun()
-
-    selected_daerah = st.sidebar.multiselect(
-        "Daerah",
-        options=all_daerah,
-        default=st.session_state.selected_daerah,
-        key="selected_daerah",
-    )
-
-    selected_tahun = st.sidebar.multiselect(
-        "Tahun",
-        options=all_tahun,
-        default=st.session_state.selected_tahun,
-        key="selected_tahun",
-    )
-
-    selected_bulan = st.sidebar.multiselect(
-        "Bulan",
-        options=bulan_tersedia,
-        default=st.session_state.selected_bulan,
-        key="selected_bulan",
-    )
-
-    date_range = st.sidebar.date_input(
-        "Rentang Tanggal",
-        value=st.session_state.date_range,
-        min_value=df["tanggal"].min().date(),
-        max_value=df["tanggal"].max().date(),
-        key="date_range",
-    )
-
-    filtered = df[
-        (df["daerah"].isin(selected_daerah)) &
-        (df["tahun"].isin(selected_tahun)) &
-        (df["bulan"].isin(selected_bulan))
-    ].copy()
-
-    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-        start_date = pd.to_datetime(date_range[0])
-        end_date = pd.to_datetime(date_range[1])
-        filtered = filtered[
-            (filtered["tanggal"] >= start_date) &
-            (filtered["tanggal"] <= end_date)
-        ].copy()
-
-    return filtered
-
-def nice_line_chart(filtered_df: pd.DataFrame):
-    fig = px.line(
-        filtered_df.sort_values("tanggal"),
-        x="tanggal",
-        y="tavg",
-        color="daerah",
-        markers=True,
-        line_shape="spline",
-        template="plotly_dark",
-        title="Tren TAVG Harian"
-    )
-    fig.update_traces(
-        line=dict(width=3),
-        marker=dict(size=7)
-    )
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0.02)",
-        font=dict(color="#E8ECFF"),
-        legend_title_text="Daerah",
-        title_font=dict(size=18),
-        hovermode="x unified",
-        margin=dict(l=10, r=10, t=50, b=10),
-        height=480,
-    )
-    fig.update_xaxes(gridcolor="rgba(255,255,255,0.08)")
-    fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
-    return fig
-
-def heatmap_chart(filtered_df: pd.DataFrame):
-    pivot = filtered_df.pivot_table(
-        values="tavg",
-        index="daerah",
-        columns="bulan_tahun",
-        aggfunc="mean"
-    )
-
-    fig = px.imshow(
-        pivot,
-        aspect="auto",
-        color_continuous_scale=["#1f1d4a", "#2b7cff", "#00e5ff", "#a855f7"],
-        template="plotly_dark",
-        title="Heatmap TAVG per Daerah"
-    )
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0.02)",
-        font=dict(color="#E8ECFF"),
-        title_font=dict(size=18),
-        margin=dict(l=10, r=10, t=50, b=10),
-        height=420,
-    )
-    return fig
-
-def boxplot_chart(filtered_df: pd.DataFrame):
     fig = px.box(
         filtered_df,
         x="daerah",
-        y="tavg",
+        y=parameter_col,
         color="daerah",
         template="plotly_dark",
-        title="Distribusi TAVG"
+        title=f"Distribusi {parameter_label}",
     )
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -400,50 +319,73 @@ def boxplot_chart(filtered_df: pd.DataFrame):
         margin=dict(l=10, r=10, t=50, b=10),
         height=420,
     )
+    fig.update_xaxes(tickangle=-20, gridcolor="rgba(255,255,255,0.08)")
+    fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
     return fig
 
-def bar_avg_chart(filtered_df: pd.DataFrame):
-    avg_daerah = (
-        filtered_df.groupby("daerah", as_index=False)[["tn", "tx", "tavg"]]
+
+def district_comparison_chart(filtered_df: pd.DataFrame, parameter_col: str, parameter_label: str):
+    if filtered_df.empty or parameter_col not in filtered_df.columns:
+        return None
+
+    comp_df = (
+        filtered_df
+        .groupby("daerah", as_index=False)[parameter_col]
         .mean()
-        .sort_values("tavg", ascending=False)
+        .sort_values(parameter_col, ascending=False)
     )
 
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=avg_daerah["daerah"],
-        y=avg_daerah["tn"],
-        name="TN",
-        marker_color="#00E5FF"
-    ))
-    fig.add_trace(go.Bar(
-        x=avg_daerah["daerah"],
-        y=avg_daerah["tx"],
-        name="TX",
-        marker_color="#A855F7"
-    ))
-    fig.add_trace(go.Bar(
-        x=avg_daerah["daerah"],
-        y=avg_daerah["tavg"],
-        name="TAVG",
-        marker_color="#6EE7FF"
-    ))
-
-    fig.update_layout(
-        barmode="group",
+    fig = px.bar(
+        comp_df,
+        x="daerah",
+        y=parameter_col,
         template="plotly_dark",
-        title="Rata-rata TN, TX, dan TAVG per Daerah",
+        title=f"Perbandingan {parameter_label} per Daerah",
+        color=parameter_col,
+        color_continuous_scale=["#00E5FF", "#A855F7"],
+    )
+    fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(255,255,255,0.02)",
         font=dict(color="#E8ECFF"),
         title_font=dict(size=18),
         margin=dict(l=10, r=10, t=50, b=10),
         height=420,
-        legend_title_text="Variabel",
+        showlegend=False,
     )
     fig.update_xaxes(tickangle=-20, gridcolor="rgba(255,255,255,0.08)")
     fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
     return fig
+
+
+def heatmap_chart(filtered_df: pd.DataFrame, parameter_col: str, parameter_label: str):
+    if filtered_df.empty or parameter_col not in filtered_df.columns:
+        return None
+
+    pivot = filtered_df.pivot_table(
+        values=parameter_col,
+        index="daerah",
+        columns="bulan_tahun",
+        aggfunc="mean"
+    )
+
+    fig = px.imshow(
+        pivot,
+        aspect="auto",
+        color_continuous_scale=["#1f1d4a", "#2b7cff", "#00e5ff", "#a855f7"],
+        template="plotly_dark",
+        title=f"Heatmap {parameter_label} per Daerah"
+    )
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.02)",
+        font=dict(color="#E8ECFF"),
+        title_font=dict(size=18),
+        margin=dict(l=10, r=10, t=50, b=10),
+        height=420,
+    )
+    return fig
+
 
 def wind_chart(filtered_df: pd.DataFrame):
     if "ddd_car" not in filtered_df.columns:
@@ -455,7 +397,7 @@ def wind_chart(filtered_df: pd.DataFrame):
         .astype(str)
         .str.strip()
     )
-    wind_df = wind_df[wind_df != "NAN"]
+    wind_df = wind_df[(wind_df != "NAN") & (wind_df != "")]
 
     if wind_df.empty:
         return None
@@ -469,14 +411,14 @@ def wind_chart(filtered_df: pd.DataFrame):
         values="jumlah",
         hole=0.5,
         template="plotly_dark",
-        title="Distribusi Arah Angin Dominan"
+        title="Distribusi Arah Angin Dominan",
     )
     fig.update_traces(
         textposition="inside",
         textinfo="percent+label",
         marker=dict(
             colors=["#00E5FF", "#A855F7", "#6EE7FF", "#7C3AED", "#38BDF8", "#C084FC"]
-        )
+        ),
     )
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -488,6 +430,343 @@ def wind_chart(filtered_df: pd.DataFrame):
     )
     return fig
 
+
+def wind_speed_chart(filtered_df: pd.DataFrame):
+    if not all(col in filtered_df.columns for col in ["ff_x", "ff_avg", "daerah"]):
+        return None
+
+    wind_speed = (
+        filtered_df
+        .groupby("daerah", as_index=False)[["ff_x", "ff_avg"]]
+        .mean()
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=wind_speed["daerah"],
+        y=wind_speed["ff_x"],
+        name="FF_X",
+        marker_color="#00E5FF"
+    ))
+    fig.add_trace(go.Bar(
+        x=wind_speed["daerah"],
+        y=wind_speed["ff_avg"],
+        name="FF_AVG",
+        marker_color="#A855F7"
+    ))
+    fig.update_layout(
+        barmode="group",
+        template="plotly_dark",
+        title="Kecepatan Angin per Daerah",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.02)",
+        font=dict(color="#E8ECFF"),
+        margin=dict(l=10, r=10, t=50, b=10),
+        height=420,
+    )
+    fig.update_xaxes(tickangle=-20, gridcolor="rgba(255,255,255,0.08)")
+    fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
+    return fig
+
+
+def make_trend_chart(filtered_df: pd.DataFrame, mode: str, parameter_col: str, parameter_label: str, selected_year_ref=None):
+    if filtered_df.empty or parameter_col not in filtered_df.columns:
+        return None
+
+    unit = PARAMETER_UNIT.get(parameter_col, "")
+
+    if mode == "Harian":
+        chart_df = (
+            filtered_df
+            .groupby("tanggal", as_index=False)[parameter_col]
+            .mean()
+            .sort_values("tanggal")
+        )
+
+        fig = px.line(
+            chart_df,
+            x="tanggal",
+            y=parameter_col,
+            markers=True,
+            line_shape="spline",
+            template="plotly_dark",
+            title=f"Tren Harian {parameter_label}",
+        )
+        fig.update_traces(line=dict(width=3), marker=dict(size=7))
+        fig.update_xaxes(title="Tanggal")
+        fig.update_yaxes(title=f"{parameter_label} ({unit})" if unit else parameter_label)
+
+    elif mode == "Bulanan":
+        chart_df = (
+            filtered_df
+            .groupby(["bulan_num", "bulan"], as_index=False)[parameter_col]
+            .mean()
+            .sort_values("bulan_num")
+        )
+
+        fig = px.bar(
+            chart_df,
+            x="bulan",
+            y=parameter_col,
+            template="plotly_dark",
+            title=f"Tren Bulanan {parameter_label} ({selected_year_ref})",
+            color=parameter_col,
+            color_continuous_scale=["#00E5FF", "#A855F7"],
+        )
+        fig.update_xaxes(categoryorder="array", categoryarray=MONTHS_ID, title="Bulan")
+        fig.update_yaxes(title=f"{parameter_label} ({unit})" if unit else parameter_label)
+        fig.update_layout(showlegend=False)
+
+    else:
+        chart_df = (
+            filtered_df
+            .groupby("tahun", as_index=False)[parameter_col]
+            .mean()
+            .sort_values("tahun")
+        )
+
+        fig = px.line(
+            chart_df,
+            x="tahun",
+            y=parameter_col,
+            markers=True,
+            line_shape="spline",
+            template="plotly_dark",
+            title=f"Tren Tahunan {parameter_label}",
+        )
+        fig.update_traces(line=dict(width=3), marker=dict(size=8))
+        fig.update_xaxes(title="Tahun")
+        fig.update_yaxes(title=f"{parameter_label} ({unit})" if unit else parameter_label)
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.02)",
+        font=dict(color="#E8ECFF"),
+        title_font=dict(size=18),
+        hovermode="x unified",
+        margin=dict(l=10, r=10, t=50, b=10),
+        height=460,
+    )
+    fig.update_xaxes(gridcolor="rgba(255,255,255,0.08)")
+    fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
+    return fig
+
+
+def render_metric_card(title, value, subtext=""):
+    st.markdown(
+        f"""
+        <div class="metric-wrap">
+            <div class="metric-title">{title}</div>
+            <div class="metric-value">{value}</div>
+            <div class="metric-sub">{subtext}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_parameter_trends(filtered_df: pd.DataFrame, mode: str, selected_parameters: list, selected_year_ref=None, section_key="section"):
+    if not selected_parameters:
+        selected_parameters = [DEFAULT_PARAMETER]
+
+    if len(selected_parameters) == 1:
+        label = selected_parameters[0]
+        col = PARAMETER_OPTIONS[label]
+        fig = make_trend_chart(filtered_df, mode, col, label, selected_year_ref)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True, key=f"{section_key}_{col}_{mode}")
+        else:
+            st.info("Tidak ada data yang bisa divisualisasikan.")
+        return
+
+    tabs = st.tabs(selected_parameters)
+    for tab, label in zip(tabs, selected_parameters):
+        with tab:
+            col = PARAMETER_OPTIONS[label]
+            fig = make_trend_chart(filtered_df, mode, col, label, selected_year_ref)
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True, key=f"{section_key}_{col}_{mode}")
+            else:
+                st.info("Tidak ada data yang bisa divisualisasikan.")
+
+
+def render_parameter_distributions(filtered_df: pd.DataFrame, selected_parameters: list, section_key="dist"):
+    if not selected_parameters:
+        selected_parameters = [DEFAULT_PARAMETER]
+
+    if len(selected_parameters) == 1:
+        label = selected_parameters[0]
+        col = PARAMETER_OPTIONS[label]
+        fig = distribution_chart(filtered_df, col, label)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True, key=f"{section_key}_{col}")
+        else:
+            st.info("Distribusi belum bisa ditampilkan.")
+        return
+
+    tabs = st.tabs(selected_parameters)
+    for tab, label in zip(tabs, selected_parameters):
+        with tab:
+            col = PARAMETER_OPTIONS[label]
+            fig = distribution_chart(filtered_df, col, label)
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True, key=f"{section_key}_{col}")
+            else:
+                st.info("Distribusi belum bisa ditampilkan.")
+
+
+def render_filter_box(df: pd.DataFrame, prefix: str, include_parameters: bool = True):
+    all_daerah = sorted(df["daerah"].dropna().unique().tolist())
+    all_years = sorted(df["tahun"].dropna().unique().tolist())
+    min_date = df["tanggal"].min().date()
+    max_date = df["tanggal"].max().date()
+
+    if f"{prefix}_mode" not in st.session_state:
+        st.session_state[f"{prefix}_mode"] = "Harian"
+    if f"{prefix}_daerah" not in st.session_state:
+        st.session_state[f"{prefix}_daerah"] = all_daerah
+    if f"{prefix}_years" not in st.session_state:
+        st.session_state[f"{prefix}_years"] = all_years
+    if f"{prefix}_year_single" not in st.session_state:
+        st.session_state[f"{prefix}_year_single"] = max(all_years)
+    if f"{prefix}_months" not in st.session_state:
+        st.session_state[f"{prefix}_months"] = MONTHS_ID
+    if f"{prefix}_date_range" not in st.session_state:
+        st.session_state[f"{prefix}_date_range"] = [min_date, max_date]
+    if f"{prefix}_main_param" not in st.session_state:
+        st.session_state[f"{prefix}_main_param"] = DEFAULT_PARAMETER
+    if f"{prefix}_extra_params" not in st.session_state:
+        st.session_state[f"{prefix}_extra_params"] = []
+
+    mode = st.radio(
+        "Mode Waktu",
+        ["Harian", "Bulanan", "Tahunan"],
+        key=f"{prefix}_mode",
+        horizontal=True,
+    )
+
+    daerah = st.multiselect(
+        "Daerah",
+        options=all_daerah,
+        default=st.session_state[f"{prefix}_daerah"],
+        key=f"{prefix}_daerah",
+    )
+    if not daerah:
+        daerah = all_daerah
+
+    main_param = DEFAULT_PARAMETER
+    extra_params = []
+    if include_parameters:
+        main_param = st.selectbox(
+            "Parameter Utama",
+            options=list(PARAMETER_OPTIONS.keys()),
+            index=list(PARAMETER_OPTIONS.keys()).index(st.session_state[f"{prefix}_main_param"])
+            if st.session_state[f"{prefix}_main_param"] in PARAMETER_OPTIONS
+            else list(PARAMETER_OPTIONS.keys()).index(DEFAULT_PARAMETER),
+            key=f"{prefix}_main_param",
+        )
+
+        extra_params = st.multiselect(
+            "Parameter Tambahan",
+            options=[p for p in PARAMETER_OPTIONS.keys() if p != main_param],
+            default=[p for p in st.session_state[f"{prefix}_extra_params"] if p != main_param],
+            key=f"{prefix}_extra_params",
+        )
+
+    active_params = [main_param] if include_parameters else [DEFAULT_PARAMETER]
+    if include_parameters:
+        active_params = [main_param] + [p for p in extra_params if p != main_param]
+
+    filtered = df[df["daerah"].isin(daerah)].copy()
+    selected_year_ref = None
+
+    if mode == "Harian":
+        years = st.multiselect(
+            "Tahun",
+            options=all_years,
+            default=st.session_state[f"{prefix}_years"],
+            key=f"{prefix}_years",
+        )
+        if not years:
+            years = all_years
+
+        date_range = st.date_input(
+            "Rentang Tanggal",
+            value=st.session_state[f"{prefix}_date_range"],
+            min_value=min_date,
+            max_value=max_date,
+            key=f"{prefix}_date_range",
+        )
+
+        filtered = filtered[filtered["tahun"].isin(years)].copy()
+
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+            start_date = pd.to_datetime(date_range[0])
+            end_date = pd.to_datetime(date_range[1])
+            filtered = filtered[
+                (filtered["tanggal"] >= start_date) &
+                (filtered["tanggal"] <= end_date)
+            ].copy()
+
+    elif mode == "Bulanan":
+        year = st.selectbox(
+            "Tahun",
+            options=all_years,
+            index=len(all_years) - 1,
+            key=f"{prefix}_year_single",
+        )
+
+        months = st.multiselect(
+            "Bulan",
+            options=MONTHS_ID,
+            default=st.session_state[f"{prefix}_months"],
+            key=f"{prefix}_months",
+        )
+        if not months:
+            months = MONTHS_ID
+
+        month_nums = [MONTH_TO_NUM[m] for m in months]
+        filtered = filtered[
+            (filtered["tahun"] == year) &
+            (filtered["bulan_num"].isin(month_nums))
+        ].copy()
+        selected_year_ref = year
+
+    else:
+        years = st.multiselect(
+            "Tahun",
+            options=all_years,
+            default=st.session_state[f"{prefix}_years"],
+            key=f"{prefix}_years",
+        )
+        if not years:
+            years = all_years
+
+        filtered = filtered[filtered["tahun"].isin(years)].copy()
+        selected_year_ref = years
+
+    return filtered, mode, active_params, main_param, selected_year_ref
+
+
+def render_page_summary(df: pd.DataFrame):
+    total_rows = len(df)
+    total_daerah = df["daerah"].nunique()
+    min_date_all = df["tanggal"].min().date()
+    max_date_all = df["tanggal"].max().date()
+    avg_tavg_all = safe_mean(get_series(df, "tavg"))
+
+    st.markdown("### Ringkasan Dataset")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        render_metric_card("Jumlah Data", f"{total_rows:,}", f"Daerah: {total_daerah}")
+    with c2:
+        render_metric_card("Data Terlama", str(min_date_all), "Tanggal awal")
+    with c3:
+        render_metric_card("Data Terbaru", str(max_date_all), "Tanggal akhir")
+    with c4:
+        render_metric_card("Rata-rata TAVG", fmt_num(avg_tavg_all, "°C"), "Seluruh dataset")
+
+
 # =========================
 # LOAD DATA
 # =========================
@@ -496,6 +775,16 @@ try:
 except Exception as e:
     st.error(f"Gagal memuat data: {e}")
     st.stop()
+
+# =========================
+# SIDEBAR
+# =========================
+st.sidebar.markdown("## Dashboard BMKG")
+st.sidebar.info("BY KELOMPOK 7:\n- Falissa Advisherlailillah Putri Esa \n- Ima Dwi Rahmania \n- Shofie Fadliya Rahma ")
+
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
 
 # =========================
 # HERO
@@ -511,206 +800,239 @@ st.markdown(
 )
 
 # =========================
-# FILTER
+# SUMMARY UMUM
 # =========================
-filtered_df = apply_filters(df)
-
-# =========================
-# QUICK INSIGHTS
-# =========================
-if filtered_df.empty:
-    st.warning("Data kosong. Coba ubah filter yang dipilih.")
-    st.stop()
-
-min_tavg = safe_min(filtered_df["tavg"])
-max_tavg = safe_max(filtered_df["tavg"])
-avg_tavg = safe_mean(filtered_df["tavg"])
-avg_tn = safe_mean(filtered_df["tn"])
-avg_tx = safe_mean(filtered_df["tx"])
-
-top_daerah = (
-    filtered_df.groupby("daerah")["tavg"]
-    .mean()
-    .sort_values(ascending=False)
-)
-
-if not top_daerah.empty:
-    daerah_terpanas = top_daerah.index[0]
-    daerah_terdingin = top_daerah.index[-1]
-else:
-    daerah_terpanas = "-"
-    daerah_terdingin = "-"
-
-latest_date = filtered_df["tanggal"].max().date()
-total_data = len(filtered_df)
-
-st.markdown("### Ringkasan Cepat")
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    render_metric_card("Jumlah Data", f"{total_data:,}", f"Update terakhir: {latest_date}")
-with c2:
-    render_metric_card("Rata-rata TAVG", fmt_num(avg_tavg, "°C"), f"Min: {fmt_num(min_tavg, '°C')} | Max: {fmt_num(max_tavg, '°C')}")
-with c3:
-    render_metric_card("Daerah Terpanas", daerah_terpanas, f"Rata-rata TAVG tertinggi")
-with c4:
-    render_metric_card("Daerah Terdingin", daerah_terdingin, f"Rata-rata TAVG terendah")
+render_page_summary(df)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # =========================
 # TABS
 # =========================
-tab_overview, tab_suhu, tab_angin, tab_dataset = st.tabs(
-    ["📊 Overview", "🌡️ Suhu", "💨 Angin", "📁 Dataset"]
+tab_overview, tab_distribusi, tab_angin, tab_dataset = st.tabs(
+    ["📊 Overview", "🌡️ Distribusi", "💨 Angin", "📁 Dataset"]
 )
 
 with tab_overview:
     st.markdown("### Overview BMKG")
-    col_a, col_b = st.columns([1.6, 1])
+    st.caption("Filter di bawah hanya mempengaruhi grafik pada tab ini.")
 
-    with col_a:
-        st.plotly_chart(
-            nice_line_chart(filtered_df),
-            use_container_width=True,
-            key="overview_line"
+    ov_df, ov_mode, ov_params, ov_main_param, ov_year_ref = render_filter_box(
+        df,
+        prefix="overview",
+        include_parameters=True
+    )
+
+    if ov_df.empty:
+        st.warning("Data kosong. Coba ubah filter pada tab Overview.")
+    else:
+        ov_main_param_col = PARAMETER_OPTIONS[ov_main_param]
+        ov_main_unit = PARAMETER_UNIT.get(ov_main_param_col, "")
+
+        ov_avg_tn = safe_mean(get_series(ov_df, "tn"))
+        ov_avg_tx = safe_mean(get_series(ov_df, "tx"))
+        ov_avg_tavg = safe_mean(get_series(ov_df, "tavg"))
+
+        top_daerah = (
+            ov_df.groupby("daerah")["tavg"]
+            .mean()
+            .sort_values(ascending=False)
         )
-
-    with col_b:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.markdown("#### Insight Otomatis")
-        st.write(f"• Data paling baru pada **{latest_date}**")
-        st.write(f"• Rata-rata **TN**: **{fmt_num(avg_tn, '°C')}**")
-        st.write(f"• Rata-rata **TX**: **{fmt_num(avg_tx, '°C')}**")
-        st.write(f"• Rata-rata **TAVG**: **{fmt_num(avg_tavg, '°C')}**")
-        st.write(f"• Daerah terpanas: **{daerah_terpanas}**")
-        st.write(f"• Daerah terdingin: **{daerah_terdingin}**")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    col_c, col_d = st.columns([1, 1])
-    with col_c:
-        st.plotly_chart(
-            bar_avg_chart(filtered_df),
-            use_container_width=True,
-            key="overview_bar"
-        )
-    with col_d:
-        heatmap = heatmap_chart(filtered_df)
-        st.plotly_chart(
-            heatmap,
-            use_container_width=True,
-            key="overview_heatmap"
-        )
-
-with tab_suhu:
-    st.markdown("### Visualisasi Suhu")
-    col1, col2 = st.columns([1.35, 1])
-
-    with col1:
-        mode = st.selectbox(
-            "Pilih gaya visual",
-            ["Tren TAVG", "Distribusi TAVG", "Rata-rata TN/TX/TAVG"],
-            index=0,
-        )
-
-        if mode == "Tren TAVG":
-            st.plotly_chart(
-                nice_line_chart(filtered_df),
-                use_container_width=True,
-                key="suhu_line"
-            )
-        elif mode == "Distribusi TAVG":
-            st.plotly_chart(
-                boxplot_chart(filtered_df),
-                use_container_width=True,
-                key="suhu_box"
-            )
+        if not top_daerah.empty:
+            daerah_terpanas = top_daerah.index[0]
+            daerah_terdingin = top_daerah.index[-1]
         else:
-            st.plotly_chart(
-                bar_avg_chart(filtered_df),
-                use_container_width=True,
-                key="suhu_bar"
+            daerah_terpanas = "-"
+            daerah_terdingin = "-"
+
+        latest_date = ov_df["tanggal"].max().date()
+        total_data = len(ov_df)
+        avg_param = safe_mean(get_series(ov_df, ov_main_param_col))
+        min_param = safe_min(get_series(ov_df, ov_main_param_col))
+        max_param = safe_max(get_series(ov_df, ov_main_param_col))
+
+        st.markdown("#### Ringkasan Cepat")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            render_metric_card("Jumlah Data", f"{total_data:,}", f"Update terakhir: {latest_date}")
+        with c2:
+            render_metric_card(
+                f"Rata-rata {ov_main_param}",
+                fmt_num(avg_param, ov_main_unit),
+                f"Min: {fmt_num(min_param, ov_main_unit)} | Max: {fmt_num(max_param, ov_main_unit)}"
+            )
+        with c3:
+            render_metric_card("Daerah Terpanas", daerah_terpanas, "Rata-rata TAVG tertinggi")
+        with c4:
+            render_metric_card("Daerah Terdingin", daerah_terdingin, "Rata-rata TAVG terendah")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        col_a, col_b = st.columns([1.6, 1])
+        with col_a:
+            render_parameter_trends(
+                filtered_df=ov_df,
+                mode=ov_mode,
+                selected_parameters=ov_params,
+                selected_year_ref=ov_year_ref,
+                section_key="overview_trend"
             )
 
-    with col2:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.markdown("#### Statistik Suhu")
-        st.write(f"• TN terendah: **{fmt_num(safe_min(filtered_df['tn']), '°C')}**")
-        st.write(f"• TN tertinggi: **{fmt_num(safe_max(filtered_df['tn']), '°C')}**")
-        st.write(f"• TX terendah: **{fmt_num(safe_min(filtered_df['tx']), '°C')}**")
-        st.write(f"• TX tertinggi: **{fmt_num(safe_max(filtered_df['tx']), '°C')}**")
-        st.write(f"• TAVG terendah: **{fmt_num(safe_min(filtered_df['tavg']), '°C')}**")
-        st.write(f"• TAVG tertinggi: **{fmt_num(safe_max(filtered_df['tavg']), '°C')}**")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with col_b:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.markdown("#### Insight Otomatis")
+            st.write(f"• Mode aktif: **{ov_mode}**")
+            st.write(f"• Parameter utama: **{ov_main_param}**")
+            st.write(f"• Parameter lain: **{', '.join([p for p in ov_params if p != ov_main_param]) or '-'}**")
+            st.write(f"• Data paling baru pada **{latest_date}**")
+            st.write(f"• Rata-rata **TN**: **{fmt_num(ov_avg_tn, '°C')}**")
+            st.write(f"• Rata-rata **TX**: **{fmt_num(ov_avg_tx, '°C')}**")
+            st.write(f"• Rata-rata **TAVG**: **{fmt_num(ov_avg_tavg, '°C')}**")
+            st.write(f"• Daerah terpanas: **{daerah_terpanas}**")
+            st.write(f"• Daerah terdingin: **{daerah_terdingin}**")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        col_c, col_d = st.columns([1, 1])
+        with col_c:
+            comp_fig = district_comparison_chart(ov_df, ov_main_param_col, ov_main_param)
+            if comp_fig is not None:
+                st.plotly_chart(
+                    comp_fig,
+                    use_container_width=True,
+                    key=f"overview_comparison_{ov_main_param_col}"
+                )
+
+        with col_d:
+            heatmap_fig = heatmap_chart(ov_df, ov_main_param_col, ov_main_param)
+            if heatmap_fig is not None:
+                st.plotly_chart(
+                    heatmap_fig,
+                    use_container_width=True,
+                    key=f"overview_heatmap_{ov_main_param_col}"
+                )
+
+with tab_distribusi:
+    st.markdown("### Distribusi Data")
+    st.caption("Filter di bawah hanya mempengaruhi grafik pada tab ini.")
+
+    dist_df, dist_mode, dist_params, dist_main_param, dist_year_ref = render_filter_box(
+        df,
+        prefix="distribution",
+        include_parameters=True
+    )
+
+    if dist_df.empty:
+        st.warning("Data kosong. Coba ubah filter pada tab Distribusi.")
+    else:
+        dist_main_param_col = PARAMETER_OPTIONS[dist_main_param]
+        dist_main_unit = PARAMETER_UNIT.get(dist_main_param_col, "")
+
+        dist_avg = safe_mean(get_series(dist_df, dist_main_param_col))
+        dist_min = safe_min(get_series(dist_df, dist_main_param_col))
+        dist_max = safe_max(get_series(dist_df, dist_main_param_col))
+
+        col1, col2 = st.columns([1.35, 1])
+
+        with col1:
+            render_parameter_distributions(
+                filtered_df=dist_df,
+                selected_parameters=dist_params,
+                section_key="distribution_box"
+            )
+
+        with col2:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.markdown("#### Statistik Parameter")
+            st.write(f"• Parameter utama: **{dist_main_param}**")
+            st.write(f"• Mode aktif: **{dist_mode}**")
+            st.write(f"• Rata-rata: **{fmt_num(dist_avg, dist_main_unit)}**")
+            st.write(f"• Nilai minimum: **{fmt_num(dist_min, dist_main_unit)}**")
+            st.write(f"• Nilai maksimum: **{fmt_num(dist_max, dist_main_unit)}**")
+            st.write(f"• Jumlah daerah: **{dist_df['daerah'].nunique()}**")
+            st.write(f"• Jumlah tahun: **{dist_df['tahun'].nunique()}**")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        dist_trend_fig = make_trend_chart(dist_df, dist_mode, dist_main_param_col, dist_main_param, dist_year_ref)
+        if dist_trend_fig is not None:
+            st.plotly_chart(
+                dist_trend_fig,
+                use_container_width=True,
+                key=f"distribution_trend_{dist_main_param_col}"
+            )
 
 with tab_angin:
     st.markdown("### Visualisasi Angin")
-    col1, col2 = st.columns([1.25, 1])
+    st.caption("Filter di bawah hanya mempengaruhi grafik pada tab ini.")
 
-    with col1:
-        wind_fig = wind_chart(filtered_df)
-        if wind_fig is not None:
+    wind_df, wind_mode, _, wind_main_param, wind_year_ref = render_filter_box(
+        df,
+        prefix="wind",
+        include_parameters=False
+    )
+
+    if wind_df.empty:
+        st.warning("Data kosong. Coba ubah filter pada tab Angin.")
+    else:
+        col1, col2 = st.columns([1.25, 1])
+
+        with col1:
+            wind_fig = wind_chart(wind_df)
+            if wind_fig is not None:
+                st.plotly_chart(
+                    wind_fig,
+                    use_container_width=True,
+                    key="wind_pie"
+                )
+            else:
+                st.info("Data arah angin belum cukup untuk divisualisasikan.")
+
+        with col2:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.markdown("#### Ringkasan Angin")
+            st.write(f"• Mode aktif: **{wind_mode}**")
+            st.write(f"• Rata-rata kecepatan angin maksimum: **{fmt_num(safe_mean(get_series(wind_df, 'ff_x')))}**")
+            st.write(f"• Rata-rata kecepatan angin: **{fmt_num(safe_mean(get_series(wind_df, 'ff_avg')))}**")
+            st.write(f"• Kategori arah dominan: **{wind_df['ddd_car'].nunique() if 'ddd_car' in wind_df.columns else 0}**")
+            if "ddd_x" in wind_df.columns:
+                st.write(f"• Derajat angin minimum: **{fmt_num(safe_min(get_series(wind_df, 'ddd_x')))}**")
+                st.write(f"• Derajat angin maksimum: **{fmt_num(safe_max(get_series(wind_df, 'ddd_x')))}**")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        wind_speed_fig = wind_speed_chart(wind_df)
+        if wind_speed_fig is not None:
             st.plotly_chart(
-                wind_fig,
+                wind_speed_fig,
                 use_container_width=True,
-                key="wind_pie"
+                key="wind_speed_bar"
             )
-        else:
-            st.info("Data arah angin belum cukup untuk divisualisasikan.")
-
-    with col2:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.markdown("#### Ringkasan Angin")
-        st.write(f"• Rata-rata kecepatan angin maksimum: **{fmt_num(safe_mean(filtered_df['ff_x']), '')}**")
-        st.write(f"• Rata-rata kecepatan angin: **{fmt_num(safe_mean(filtered_df['ff_avg']), '')}**")
-        st.write(f"• Data arah dominan: **{filtered_df['ddd_car'].nunique() if 'ddd_car' in filtered_df.columns else 0}** kategori")
-        if "ddd_x" in filtered_df.columns:
-            st.write(f"• Derajat angin min: **{fmt_num(safe_min(filtered_df['ddd_x']), '')}**")
-            st.write(f"• Derajat angin max: **{fmt_num(safe_max(filtered_df['ddd_x']), '')}**")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    if "ff_x" in filtered_df.columns and "ff_avg" in filtered_df.columns:
-        wind_speed = filtered_df.groupby("daerah", as_index=False)[["ff_x", "ff_avg"]].mean()
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=wind_speed["daerah"],
-            y=wind_speed["ff_x"],
-            name="FF_X",
-            marker_color="#00E5FF"
-        ))
-        fig.add_trace(go.Bar(
-            x=wind_speed["daerah"],
-            y=wind_speed["ff_avg"],
-            name="FF_AVG",
-            marker_color="#A855F7"
-        ))
-        fig.update_layout(
-            barmode="group",
-            template="plotly_dark",
-            title="Kecepatan Angin per Daerah",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(255,255,255,0.02)",
-            font=dict(color="#E8ECFF"),
-            margin=dict(l=10, r=10, t=50, b=10),
-            height=420,
-        )
-        fig.update_xaxes(tickangle=-20, gridcolor="rgba(255,255,255,0.08)")
-        fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            key="wind_speed"
-        )
 
 with tab_dataset:
     st.markdown("### Dataset")
-    search = st.text_input("Cari data", placeholder="Contoh: SURABAYA, 2026-06-03, 27.5")
-    show_rows = st.selectbox("Jumlah baris yang ditampilkan", [10, 25, 50, 100], index=1)
+    st.caption("Filter di bawah hanya mempengaruhi tabel pada tab ini.")
 
-    table_df = filtered_df.copy()
+    data_df, data_mode, _, data_main_param, data_year_ref = render_filter_box(
+        df,
+        prefix="dataset",
+        include_parameters=False
+    )
+
+    search = st.text_input(
+        "Cari data",
+        placeholder="Contoh: SURABAYA, 2026-06-03, 27.5",
+        key="dataset_search"
+    )
+    show_rows = st.selectbox(
+        "Jumlah baris yang ditampilkan",
+        [10, 25, 50, 100],
+        index=1,
+        key="dataset_show_rows"
+    )
+
+    table_df = data_df.copy()
 
     if search.strip():
         q = search.strip().upper()
@@ -727,9 +1049,19 @@ with tab_dataset:
     ]
     kolom_tersedia = [c for c in kolom_tampil if c in table_df.columns]
 
+    table_show = table_df[kolom_tersedia].head(show_rows).copy()
+    if "tanggal" in table_show.columns:
+        table_show["tanggal"] = table_show["tanggal"].dt.strftime("%Y-%m-%d")
+
     st.caption(f"Menampilkan {min(len(table_df), show_rows)} dari {len(table_df)} baris")
+    st.write(f"Mode filter tab ini: **{data_mode}**")
+    if data_mode == "Bulanan":
+        st.write(f"Tahun yang dipilih: **{data_year_ref}**")
+    elif data_mode == "Tahunan":
+        st.write(f"Tahun yang dipilih: **{data_year_ref}**")
+
     st.dataframe(
-        table_df[kolom_tersedia].head(show_rows),
+        table_show,
         use_container_width=True,
         height=420
     )
